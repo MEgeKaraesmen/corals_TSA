@@ -1,0 +1,6 @@
+Paths are alphabetic, H youngest (outer of coral) O oldest. Numbers gets younger increasing. 1A oldest 80A oldest of the path. 
+
+Path M has wrong labeling.12 SPL-A4 Path M 1A = 12 SPL-A Path M 39A, so all the samples afterwards should shift. The YOUNGER ones have stickers with 12 SPL-A4. 
+
+Sample 12 SPL-A4 Path J 21 A & 12 SPL-A4 Path J 22 A are both in the sample case 12 SPL-A4 Path J 21 A ! 12 SPL-A4 Path J 22 is empty. So there is no J 22 in data and J 21 is an average of 21 & 22.
+
