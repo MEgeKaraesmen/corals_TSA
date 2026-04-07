@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fred Age Matcher v2</title>
+<style>
+  :root {
+    --bg:#0a0e14; --panel:#111720; --border:#1e2a38;
+    --fred:#f5a623; --clim:#4ecdc4; --match:#8b5cf6;
+    --sel-fred:#ff9f43; --sel-clim:#74b9ff;
+    --bound:#f0b429; --pin:#ff4757; --pin-bg:rgba(255,71,87,0.13);
+    --text:#cdd6e0; --muted:#4a6075; --accent:#56d364;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; background:var(--bg); color:var(--text);
+    font-family:'JetBrains Mono',monospace; overflow:hidden;
+    display:flex; flex-direction:column; font-size:11px; }
+
+  #toolbar {
+    background:var(--panel); border-bottom:1px solid var(--border);
+    padding:6px 12px; display:flex; align-items:center; gap:8px;
+    flex-wrap:wrap; flex-shrink:0;
+  }
+  .sep { width:1px; height:22px; background:var(--border); margin:0 2px; flex-shrink:0; }
+  .btn {
+    background:transparent; border:1px solid var(--border); color:var(--muted);
+    padding:4px 10px; border-radius:3px; cursor:pointer;
+    font:11px/1 'JetBrains Mono',monospace; transition:all .12s; white-space:nowrap;
+  }
+  .btn:hover { border-color:var(--text); color:var(--text); }
+  .btn.active      { background:var(--fred); border-color:var(--fred); color:#000; }
+  .btn.active-edit { background:#1a2e10; border-color:var(--accent); color:var(--accent); }
+  .btn.active-pin  { background:#3d0d11; border-color:var(--pin); color:var(--pin); }
+  .btn.io  { border-color:#1e3a28; color:var(--accent); }
+  .btn.io:hover { background:#1a2e1e; }
+
+  #status {
+    flex:1; font-size:10px; color:var(--muted);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0;
+  }
+  #corr-badge {
+    margin-left:auto; background:var(--panel); border:1px solid var(--border);
+    border-radius:3px; padding:3px 9px; font-size:10px; color:var(--muted);
+    white-space:nowrap; flex-shrink:0;
+  }
+  #corr-badge span { color:var(--accent); font-weight:600; }
+
+  #pin-bar {
+    background:#1a0d0f; border-bottom:1px solid #3d1a1e;
+    padding:4px 12px; display:flex; align-items:center; gap:10px;
+    flex-shrink:0; font-size:10px;
+  }
+  #pin-bar label { color:#ff6b7a; }
+  #pin-bar input[type=number] {
+    background:#0a0e14; color:var(--text); border:1px solid #3d1a1e;
+    border-radius:3px; padding:2px 6px; font:10px/1 'JetBrains Mono',monospace;
+    width:90px;
+  }
+  #pin-bar .pin-info { color:var(--muted); flex:1; }
+  #pin-bar .pin-tag  { color:var(--pin); font-weight:600; }
+
+  #charts { flex:1; display:flex; flex-direction:column; min-height:0; }
+  .chart-wrap {
+    flex:1; position:relative; min-height:0; overflow:hidden;
+    border-bottom:1px solid var(--border);
+  }
+  canvas { position:absolute; top:0; left:0; width:100%; height:100%; }
+  .chart-label {
+    position:absolute; top:6px; left:10px; font-size:9px; font-weight:600;
+    letter-spacing:.1em; text-transform:uppercase; pointer-events:none; z-index:2;
+  }
+  #lbl-fred { color:var(--fred); }
+  #lbl-clim { color:var(--clim); }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div id="toolbar">
+  <span style="color:var(--fred);font-weight:600;letter-spacing:.06em;font-size:12px;">Fred Age Matcher <span style="color:var(--pin);font-size:9px;">v2 + EQ pin</span></span>
+  <div class="sep"></div>
+  <button class="btn" id="btn-match" onclick="setMode('match')">⚡ Match</button>
+  <button class="btn" id="btn-edit"  onclick="setMode('edit')">✏ Edit bounds</button>
+  <button class="btn" id="btn-pin"   onclick="setMode('pin')">📌 Set EQ pin</button>
+  <div class="sep"></div>
+  <button class="btn" onclick="undo()">↩ Undo</button>
+  <button class="btn" onclick="clearMatches()">✕ Clear matches</button>
+  <button class="btn" onclick="clearPin()">✕ Clear pin</button>
+  <div class="sep"></div>
+  <button class="btn io" onclick="exportCSV()">↓ Export CSV</button>
+  <label class="btn io" style="cursor:pointer">↑ Import<input type="file" id="imp" accept=".csv" style="display:none" onchange="importCSV(event)"></label>
+  <div class="sep"></div>
+  <span id="status">Matches pre-loaded — set EQ pin mode then click the d13C jump on the Fred chart</span>
+  <div id="corr-badge">r = <span id="corr-val">—</span> &nbsp;|&nbsp; <span id="matched-count">0</span> matched / <span id="fred-count">?</span> bands</div>
+</div>
+
+<!-- Earthquake pin bar -->
+<div id="pin-bar">
+  <span class="pin-tag">📌 EQ PIN</span>
+  <label>Pseudo-year (Fred x):</label>
+  <input type="number" id="pin-pseudo" step="0.001" placeholder="click chart →" readonly>
+  <label>→ Calendar year:</label>
+  <input type="number" id="pin-cal" step="0.001" value="2007.260" onchange="updatePin()">
+  <span class="pin-info" id="pin-info">No pin set — use 📌 mode and click the d13C jump in the Fred chart, then adjust calendar year if needed.</span>
+</div>
+
+<div id="charts">
+  <div class="chart-wrap" id="wrap-fred">
+    <canvas id="cF"></canvas>
+    <span class="chart-label" id="lbl-fred">Fred δ¹⁸O  (pseudo-age → warped calendar year)</span>
+  </div>
+  <div class="chart-wrap" id="wrap-clim">
+    <canvas id="cK"></canvas>
+    <span class="chart-label" id="lbl-clim">Climate synthetic δ¹⁸O  (calendar year)</span>
+  </div>
+</div>
+
+<script>
+// ── DATA ─────────────────────────────────────────────────────────────────────
+const FRED_SERIES = [{"x": 1994.5, "y": -5.559183}, {"x": 1994.583333, "y": -5.54663}, {"x": 1994.666667, "y": -5.502889}, {"x": 1994.75, "y": -5.310833}, {"x": 1994.833333, "y": -5.166991}, {"x": 1994.916667, "y": -5.129928}, {"x": 1995.0, "y": -5.245318}, {"x": 1995.066667, "y": -5.308651}, {"x": 1995.266667, "y": -5.303643}, {"x": 1995.333333, "y": -5.250025}, {"x": 1995.4, "y": -5.306158}, {"x": 1995.466667, "y": -5.427698}, {"x": 1995.533333, "y": -5.498818}, {"x": 1995.6, "y": -5.416011}, {"x": 1995.666667, "y": -5.317495}, {"x": 1995.733333, "y": -5.276659}, {"x": 1995.8, "y": -5.320734}, {"x": 1995.866667, "y": -5.397401}, {"x": 1995.933333, "y": -5.351423}, {"x": 1996.0, "y": -5.317355}, {"x": 1996.2, "y": -5.137863}, {"x": 1996.4, "y": -5.033329}, {"x": 1996.6, "y": -4.966802}, {"x": 1996.8, "y": -5.107951}, {"x": 1997.0, "y": -5.249791}, {"x": 1997.244444, "y": -5.361647}, {"x": 1997.488889, "y": -5.3336}, {"x": 1997.733333, "y": -5.314567}, {"x": 1997.977778, "y": -5.339944}, {"x": 1998.222222, "y": -5.389695}, {"x": 1998.466667, "y": -5.413068}, {"x": 1998.711111, "y": -5.401381}, {"x": 1998.955556, "y": -5.350295}, {"x": 1999.2, "y": -5.315235}, {"x": 1999.333333, "y": -5.308223}, {"x": 1999.466667, "y": -5.313232}, {"x": 1999.6, "y": -5.373668}, {"x": 1999.733333, "y": -5.41038}, {"x": 1999.866667, "y": -5.429814}, {"x": 2000.0, "y": -5.338642}, {"x": 2000.2, "y": -5.280877}, {"x": 2000.4, "y": -5.320526}, {"x": 2000.6, "y": -5.473787}, {"x": 2000.8, "y": -5.558931}, {"x": 2001.0, "y": -5.531885}, {"x": 2001.2, "y": -5.360595}, {"x": 2001.4, "y": -5.264765}, {"x": 2001.6, "y": -5.354918}, {"x": 2001.8, "y": -5.455773}, {"x": 2002.0, "y": -5.49918}, {"x": 2002.142857, "y": -5.375303}, {"x": 2002.285714, "y": -5.243062}, {"x": 2002.428571, "y": -5.134878}, {"x": 2002.571429, "y": -5.091805}, {"x": 2002.714286, "y": -5.229123}, {"x": 2002.857143, "y": -5.389395}, {"x": 2003.0, "y": -5.502604}, {"x": 2003.125, "y": -5.44008}, {"x": 2003.25, "y": -5.311194}, {"x": 2003.375, "y": -5.266435}, {"x": 2003.5, "y": -5.376956}, {"x": 2003.625, "y": -5.542904}, {"x": 2003.75, "y": -5.63506}, {"x": 2003.875, "y": -5.580968}, {"x": 2004.0, "y": -5.443736}, {"x": 2004.142857, "y": -5.265767}, {"x": 2004.285714, "y": -5.178619}, {"x": 2004.428571, "y": -5.204329}, {"x": 2004.571429, "y": -5.385637}, {"x": 2004.714286, "y": -5.561602}, {"x": 2004.857143, "y": -5.665864}, {"x": 2005.0, "y": -5.616781}, {"x": 2005.142857, "y": -5.490567}, {"x": 2005.285714, "y": -5.308172}, {"x": 2005.428571, "y": -5.249406}, {"x": 2005.571429, "y": -5.334884}, {"x": 2005.714286, "y": -5.476458}, {"x": 2005.857143, "y": -5.562621}, {"x": 2006.0, "y": -5.542938}, {"x": 2006.166667, "y": -5.435773}, {"x": 2006.333333, "y": -5.303215}, {"x": 2006.5, "y": -5.187685}, {"x": 2006.666667, "y": -5.177334}, {"x": 2006.833333, "y": -5.262479}, {"x": 2007.0, "y": -5.383351}, {"x": 2007.1, "y": -5.38669}, {"x": 2007.2, "y": -5.265807}, {"x": 2007.4, "y": -5.264794}, {"x": 2007.45, "y": -5.489163}, {"x": 2007.5, "y": -5.66012}, {"x": 2007.666667, "y": -5.61304}, {"x": 2007.833333, "y": -5.425722}, {"x": 2008.0, "y": -5.37931}, {"x": 2008.2, "y": -5.343916}, {"x": 2008.4, "y": -5.388325}, {"x": 2008.6, "y": -5.379644}, {"x": 2008.8, "y": -5.405354}, {"x": 2009.0, "y": -5.394335}, {"x": 2009.111111, "y": -5.42639}, {"x": 2009.222222, "y": -5.514206}, {"x": 2009.333333, "y": -5.611036}, {"x": 2009.444444, "y": -5.647766}, {"x": 2009.555556, "y": -5.515875}, {"x": 2009.666667, "y": -5.414036}, {"x": 2009.777778, "y": -5.350595}, {"x": 2009.888889, "y": -5.423719}, {"x": 2010.0, "y": -5.494172}, {"x": 2010.25, "y": -5.509197}, {"x": 2010.5, "y": -5.523889}, {"x": 2010.75, "y": -5.427725}, {"x": 2011.0, "y": -5.337918}, {"x": 2011.142857, "y": -5.23708}, {"x": 2011.285714, "y": -5.233073}, {"x": 2011.428571, "y": -5.331562}, {"x": 2011.571429, "y": -5.491166}, {"x": 2011.714286, "y": -5.569633}, {"x": 2011.857143, "y": -5.549933}, {"x": 2012.0, "y": -5.494672}];
+const FRED_RAW    = [{"x": 1994.5, "y": -5.428365}, {"x": 1994.583333, "y": -5.69}, {"x": 1994.666667, "y": -5.521523}, {"x": 1994.75, "y": -5.297143}, {"x": 1994.833333, "y": -5.113832}, {"x": 1994.916667, "y": -5.09}, {"x": 1995.0, "y": -5.185954}, {"x": 1995.066667, "y": -5.46}, {"x": 1995.266667, "y": -5.28}, {"x": 1995.333333, "y": -5.170928}, {"x": 1995.4, "y": -5.299146}, {"x": 1995.466667, "y": -5.448399}, {"x": 1995.533333, "y": -5.535547}, {"x": 1995.6, "y": -5.512508}, {"x": 1995.666667, "y": -5.199978}, {"x": 1995.733333, "y": -5.24}, {"x": 1995.8, "y": -5.39}, {"x": 1995.866667, "y": -5.332202}, {"x": 1995.933333, "y": -5.47}, {"x": 1996.0, "y": -5.252066}, {"x": 1996.2, "y": -5.23}, {"x": 1996.4, "y": -4.931522}, {"x": 1996.6, "y": -4.938466}, {"x": 1996.8, "y": -5.030418}, {"x": 1997.0, "y": -5.354969}, {"x": 1997.244444, "y": -5.363985}, {"x": 1997.488889, "y": -5.365988}, {"x": 1997.733333, "y": -5.270826}, {"x": 1997.977778, "y": -5.306888}, {"x": 1998.222222, "y": -5.442117}, {"x": 1998.466667, "y": -5.42008}, {"x": 1998.711111, "y": -5.377007}, {"x": 1998.955556, "y": -5.407058}, {"x": 1999.2, "y": -5.26682}, {"x": 1999.333333, "y": -5.271828}, {"x": 1999.466667, "y": -5.386022}, {"x": 1999.6, "y": -5.281845}, {"x": 1999.733333, "y": -5.453136}, {"x": 1999.866667, "y": -5.496158}, {"x": 2000.0, "y": -5.340148}, {"x": 2000.2, "y": -5.179621}, {"x": 2000.4, "y": -5.322864}, {"x": 2000.6, "y": -5.459095}, {"x": 2000.8, "y": -5.639401}, {"x": 2001.0, "y": -5.578297}, {"x": 2001.2, "y": -5.377957}, {"x": 2001.4, "y": -5.125529}, {"x": 2001.6, "y": -5.290809}, {"x": 2001.8, "y": -5.648416}, {"x": 2002.0, "y": -5.428093}, {"x": 2002.142857, "y": -5.42103}, {"x": 2002.285714, "y": -5.276786}, {"x": 2002.428571, "y": -5.031369}, {"x": 2002.571429, "y": -5.09648}, {"x": 2002.714286, "y": -5.147566}, {"x": 2002.857143, "y": -5.443323}, {"x": 2003.0, "y": -5.577296}, {"x": 2003.125, "y": -5.487194}, {"x": 2003.25, "y": -5.25575}, {"x": 2003.375, "y": -5.190639}, {"x": 2003.5, "y": -5.352915}, {"x": 2003.625, "y": -5.587313}, {"x": 2003.75, "y": -5.688484}, {"x": 2003.875, "y": -5.629384}, {"x": 2004.0, "y": -5.425037}, {"x": 2004.142857, "y": -5.276786}, {"x": 2004.285714, "y": -5.095478}, {"x": 2004.428571, "y": -5.163593}, {"x": 2004.571429, "y": -5.353916}, {"x": 2004.714286, "y": -5.639401}, {"x": 2004.857143, "y": -5.691489}, {"x": 2005.0, "y": -5.666702}, {"x": 2005.142857, "y": -5.492151}, {"x": 2005.285714, "y": -5.312847}, {"x": 2005.428571, "y": -5.119519}, {"x": 2005.571429, "y": -5.315852}, {"x": 2005.714286, "y": -5.569282}, {"x": 2005.857143, "y": -5.544239}, {"x": 2006.0, "y": -5.574342}, {"x": 2006.166667, "y": -5.510233}, {"x": 2006.333333, "y": -5.222745}, {"x": 2006.5, "y": -5.176667}, {"x": 2006.666667, "y": -5.163645}, {"x": 2006.833333, "y": -5.191692}, {"x": 2007.0, "y": -5.4321}, {"x": 2007.1, "y": -5.52626}, {"x": 2007.2, "y": -5.201709}, {"x": 2007.4, "y": -5.069451}, {"x": 2007.45, "y": -5.523221}, {"x": 2007.5, "y": -5.874818}, {"x": 2007.666667, "y": -5.582321}, {"x": 2007.833333, "y": -5.381981}, {"x": 2008.0, "y": -5.312864}, {"x": 2008.2, "y": -5.443085}, {"x": 2008.4, "y": -5.275801}, {"x": 2008.6, "y": -5.44609}, {"x": 2008.8, "y": -5.417041}, {"x": 2009.0, "y": -5.352932}, {"x": 2009.111111, "y": -5.413034}, {"x": 2009.222222, "y": -5.513204}, {"x": 2009.333333, "y": -5.616379}, {"x": 2009.444444, "y": -5.703527}, {"x": 2009.555556, "y": -5.623391}, {"x": 2009.666667, "y": -5.220707}, {"x": 2009.777778, "y": -5.398008}, {"x": 2009.888889, "y": -5.433068}, {"x": 2010.0, "y": -5.44008}, {"x": 2010.25, "y": -5.609367}, {"x": 2010.5, "y": -5.478144}, {"x": 2010.75, "y": -5.484154}, {"x": 2011.0, "y": -5.320877}, {"x": 2011.142857, "y": -5.208721}, {"x": 2011.285714, "y": -5.181641}, {"x": 2011.428571, "y": -5.308857}, {"x": 2011.571429, "y": -5.504189}, {"x": 2011.714286, "y": -5.660454}, {"x": 2011.857143, "y": -5.544257}, {"x": 2012.0, "y": -5.445088}];
+const CLIM_SERIES = [{"x": 1993.041067761807, "y": 0.051250856}, {"x": 1993.123203285421, "y": 0.03672068}, {"x": 1993.202600958248, "y": 0.100277424}, {"x": 1993.2874743326488, "y": 0.0201618}, {"x": 1993.3696098562627, "y": 0.1650311}, {"x": 1993.454483230664, "y": 0.27312168}, {"x": 1993.536618754278, "y": 0.35202128}, {"x": 1993.621492128679, "y": 0.44713145}, {"x": 1993.70636550308, "y": 0.43537554}, {"x": 1993.788501026694, "y": 0.38207158}, {"x": 1993.8733744010951, "y": 0.14891881}, {"x": 1993.955509924709, "y": -0.19046041}, {"x": 1994.041067761807, "y": -0.2431218}, {"x": 1994.123203285421, "y": -0.30274907}, {"x": 1994.202600958248, "y": -0.37900922}, {"x": 1994.2874743326488, "y": -0.24550965}, {"x": 1994.3696098562627, "y": -0.2095115}, {"x": 1994.454483230664, "y": -0.09224847}, {"x": 1994.536618754278, "y": 0.0827011}, {"x": 1994.621492128679, "y": 0.15977351}, {"x": 1994.70636550308, "y": 0.24198258}, {"x": 1994.788501026694, "y": 0.24670622}, {"x": 1994.8733744010951, "y": 0.052933216}, {"x": 1994.955509924709, "y": -0.07896285}, {"x": 1995.041067761807, "y": -0.18673162}, {"x": 1995.123203285421, "y": -0.32055816}, {"x": 1995.202600958248, "y": -0.3119427}, {"x": 1995.2874743326488, "y": -0.3978308}, {"x": 1995.3696098562627, "y": -0.25655922}, {"x": 1995.454483230664, "y": -0.142506}, {"x": 1995.536618754278, "y": 0.048551004}, {"x": 1995.621492128679, "y": 0.111097164}, {"x": 1995.70636550308, "y": 0.117632575}, {"x": 1995.788501026694, "y": -0.03498465}, {"x": 1995.8733744010951, "y": -0.029036999}, {"x": 1995.955509924709, "y": -0.2290349}, {"x": 1996.041067761807, "y": -0.22116214}, {"x": 1996.123203285421, "y": -0.37427145}, {"x": 1996.2053388090349, "y": -0.23621634}, {"x": 1996.290212183436, "y": -0.28488293}, {"x": 1996.37234770705, "y": -0.0857641}, {"x": 1996.457221081451, "y": 0.12615716}, {"x": 1996.539356605065, "y": 0.21255124}, {"x": 1996.624229979466, "y": 0.24087514}, {"x": 1996.7091033538672, "y": 0.10813547}, {"x": 1996.7912388774807, "y": -0.018949721}, {"x": 1996.8761122518824, "y": -0.27707562}, {"x": 1996.958247775496, "y": -0.21599934}, {"x": 1997.041067761807, "y": -0.099195644}, {"x": 1997.123203285421, "y": -0.19058314}, {"x": 1997.202600958248, "y": -0.09650618}, {"x": 1997.2874743326488, "y": -0.03049204}, {"x": 1997.3696098562627, "y": 0.188674}, {"x": 1997.454483230664, "y": 0.40690854}, {"x": 1997.536618754278, "y": 0.458293}, {"x": 1997.621492128679, "y": 0.61859196}, {"x": 1997.70636550308, "y": 0.6734119}, {"x": 1997.788501026694, "y": 0.61290115}, {"x": 1997.8733744010951, "y": 0.43550614}, {"x": 1997.955509924709, "y": 0.15138659}, {"x": 1998.041067761807, "y": 0.11800961}, {"x": 1998.123203285421, "y": -0.04882101}, {"x": 1998.202600958248, "y": -0.14995158}, {"x": 1998.2874743326488, "y": -0.25804353}, {"x": 1998.3696098562627, "y": -0.18134417}, {"x": 1998.454483230664, "y": -0.05731779}, {"x": 1998.536618754278, "y": 0.15592611}, {"x": 1998.621492128679, "y": 0.13448957}, {"x": 1998.70636550308, "y": 0.043961123}, {"x": 1998.788501026694, "y": -0.09793481}, {"x": 1998.8733744010951, "y": -0.24023962}, {"x": 1998.955509924709, "y": -0.24400812}, {"x": 1999.041067761807, "y": -0.31811994}, {"x": 1999.123203285421, "y": -0.13459261}, {"x": 1999.202600958248, "y": -0.18153314}, {"x": 1999.2874743326488, "y": -0.42273578}, {"x": 1999.3696098562627, "y": -0.29205656}, {"x": 1999.454483230664, "y": -0.12949304}, {"x": 1999.536618754278, "y": 0.018882161}, {"x": 1999.621492128679, "y": 0.04784071}, {"x": 1999.70636550308, "y": -0.09011111}, {"x": 1999.788501026694, "y": -0.23681432}, {"x": 1999.8733744010951, "y": -0.2855142}, {"x": 1999.955509924709, "y": -0.41425636}, {"x": 2000.041067761807, "y": -0.4206845}, {"x": 2000.123203285421, "y": -0.37283686}, {"x": 2000.2053388090349, "y": -0.24104616}, {"x": 2000.290212183436, "y": -0.20941982}, {"x": 2000.37234770705, "y": -0.123599604}, {"x": 2000.457221081451, "y": 0.054942485}, {"x": 2000.539356605065, "y": 0.1456474}, {"x": 2000.624229979466, "y": 0.18909852}, {"x": 2000.7091033538672, "y": 0.021907557}, {"x": 2000.7912388774807, "y": -0.15911886}, {"x": 2000.8761122518824, "y": -0.34356326}, {"x": 2000.958247775496, "y": -0.2965393}, {"x": 2001.041067761807, "y": -0.3982253}, {"x": 2001.123203285421, "y": -0.27693233}, {"x": 2001.202600958248, "y": -0.3399963}, {"x": 2001.2874743326488, "y": -0.36327907}, {"x": 2001.3696098562627, "y": -0.24412347}, {"x": 2001.454483230664, "y": -0.025499783}, {"x": 2001.536618754278, "y": 0.16813096}, {"x": 2001.621492128679, "y": 0.26211149}, {"x": 2001.70636550308, "y": 0.20920931}, {"x": 2001.788501026694, "y": 0.0463896}, {"x": 2001.8733744010951, "y": -0.21041188}, {"x": 2001.955509924709, "y": -0.28211528}, {"x": 2002.041067761807, "y": -0.38058683}, {"x": 2002.123203285421, "y": -0.33916348}, {"x": 2002.202600958248, "y": -0.31710553}, {"x": 2002.2874743326488, "y": -0.4076188}, {"x": 2002.3696098562627, "y": -0.389763}, {"x": 2002.454483230664, "y": -0.1362198}, {"x": 2002.536618754278, "y": 0.12718838}, {"x": 2002.621492128679, "y": 0.38529977}, {"x": 2002.70636550308, "y": 0.49101338}, {"x": 2002.788501026694, "y": 0.35938826}, {"x": 2002.8733744010951, "y": 0.21226496}, {"x": 2002.955509924709, "y": 0.11311903}, {"x": 2003.041067761807, "y": 0.042788014}, {"x": 2003.123203285421, "y": -0.009164646}, {"x": 2003.202600958248, "y": -0.051882155}, {"x": 2003.2874743326488, "y": -0.10213522}, {"x": 2003.3696098562627, "y": -0.10624972}, {"x": 2003.454483230664, "y": -0.054233875}, {"x": 2003.536618754278, "y": 0.05371149}, {"x": 2003.621492128679, "y": 0.21057451}, {"x": 2003.70636550308, "y": 0.3266293}, {"x": 2003.788501026694, "y": 0.025300426}, {"x": 2003.8733744010951, "y": -0.18568309}, {"x": 2003.955509924709, "y": -0.40960744}, {"x": 2004.041067761807, "y": -0.47433478}, {"x": 2004.123203285421, "y": -0.67595464}, {"x": 2004.2053388090349, "y": -0.5972377}, {"x": 2004.290212183436, "y": -0.5022934}, {"x": 2004.37234770705, "y": -0.18145727}, {"x": 2004.457221081451, "y": 0.16229932}, {"x": 2004.539356605065, "y": 0.36185998}, {"x": 2004.624229979466, "y": 0.52273256}, {"x": 2004.7091033538672, "y": 0.45308784}, {"x": 2004.7912388774807, "y": 0.14300497}, {"x": 2004.8761122518824, "y": -0.10430036}, {"x": 2004.958247775496, "y": -0.29587623}, {"x": 2005.041067761807, "y": -0.35137376}, {"x": 2005.123203285421, "y": -0.28212908}, {"x": 2005.202600958248, "y": -0.4696515}, {"x": 2005.2874743326488, "y": -0.4615014}, {"x": 2005.3696098562627, "y": -0.09967226}, {"x": 2005.454483230664, "y": 0.021396656}, {"x": 2005.536618754278, "y": 0.09983702}, {"x": 2005.621492128679, "y": 0.13715899}, {"x": 2005.70636550308, "y": 0.20914991}, {"x": 2005.788501026694, "y": -0.012720466}, {"x": 2005.8733744010951, "y": -0.33950326}, {"x": 2005.955509924709, "y": -0.5646624}, {"x": 2006.041067761807, "y": -0.6167119}, {"x": 2006.123203285421, "y": -0.38040122}, {"x": 2006.202600958248, "y": -0.44342968}, {"x": 2006.2874743326488, "y": -0.4007042}, {"x": 2006.3696098562627, "y": -0.4429652}, {"x": 2006.454483230664, "y": -0.16240862}, {"x": 2006.536618754278, "y": 0.06510713}, {"x": 2006.621492128679, "y": 0.3371853}, {"x": 2006.70636550308, "y": 0.2467525}, {"x": 2006.788501026694, "y": 0.23451155}, {"x": 2006.8733744010951, "y": -0.00067460927}, {"x": 2006.955509924709, "y": -0.1216303}, {"x": 2007.041067761807, "y": -0.35561028}, {"x": 2007.123203285421, "y": -0.31764695}, {"x": 2007.202600958248, "y": -0.51973575}, {"x": 2007.2874743326488, "y": -0.32337365}, {"x": 2007.3696098562627, "y": -0.36569455}, {"x": 2007.454483230664, "y": -0.16413188}, {"x": 2007.536618754278, "y": 0.048220806}, {"x": 2007.621492128679, "y": 0.094231434}, {"x": 2007.70636550308, "y": 0.023367632}, {"x": 2007.788501026694, "y": -0.10102503}, {"x": 2007.8733744010951, "y": -0.15914369}, {"x": 2007.955509924709, "y": -0.21229132}, {"x": 2008.041067761807, "y": -0.17010045}, {"x": 2008.123203285421, "y": -0.39295253}, {"x": 2008.2053388090349, "y": -0.38699484}, {"x": 2008.290212183436, "y": -0.26526347}, {"x": 2008.37234770705, "y": -0.17623095}, {"x": 2008.457221081451, "y": 0.012407169}, {"x": 2008.539356605065, "y": 0.08257356}, {"x": 2008.624229979466, "y": 0.16217607}, {"x": 2008.7091033538672, "y": 0.19930181}, {"x": 2008.7912388774807, "y": 0.03560148}, {"x": 2008.8761122518824, "y": -0.0114620775}, {"x": 2008.958247775496, "y": -0.24694136}, {"x": 2009.041067761807, "y": -0.27503583}, {"x": 2009.123203285421, "y": -0.38718495}, {"x": 2009.202600958248, "y": -0.5697842}, {"x": 2009.2874743326488, "y": -0.4264911}, {"x": 2009.3696098562627, "y": -0.29255214}, {"x": 2009.454483230664, "y": -0.21303633}, {"x": 2009.536618754278, "y": -0.012139493}, {"x": 2009.621492128679, "y": 0.15725729}, {"x": 2009.70636550308, "y": 0.25009444}, {"x": 2009.788501026694, "y": 0.034576513}, {"x": 2009.8733744010951, "y": -0.08853014}, {"x": 2009.955509924709, "y": -0.22447184}, {"x": 2010.041067761807, "y": -0.334359}, {"x": 2010.123203285421, "y": -0.27213895}, {"x": 2010.202600958248, "y": -0.17559515}, {"x": 2010.2874743326488, "y": -0.5090424}, {"x": 2010.3696098562627, "y": -0.30157015}, {"x": 2010.454483230664, "y": -0.28845003}, {"x": 2010.536618754278, "y": 0.01962408}, {"x": 2010.621492128679, "y": 0.16502103}, {"x": 2010.70636550308, "y": 0.15527861}, {"x": 2010.788501026694, "y": 0.036947798}, {"x": 2010.8733744010951, "y": -0.033150926}, {"x": 2010.955509924709, "y": -0.031209707}, {"x": 2011.041067761807, "y": -0.07225863}, {"x": 2011.123203285421, "y": -0.09489027}, {"x": 2011.202600958248, "y": -0.14144456}, {"x": 2011.2874743326488, "y": -0.2132792}, {"x": 2011.3696098562627, "y": -0.16772345}, {"x": 2011.454483230664, "y": 0.026589453}, {"x": 2011.536618754278, "y": 0.2766053}, {"x": 2011.621492128679, "y": 0.36767763}, {"x": 2011.70636550308, "y": 0.31939805}, {"x": 2011.788501026694, "y": 0.0724642}, {"x": 2011.8733744010951, "y": -0.13069437}, {"x": 2011.955509924709, "y": -0.30356237}, {"x": 2012.041067761807, "y": -0.41155264}, {"x": 2012.123203285421, "y": -0.25890496}, {"x": 2012.2053388090349, "y": -0.28101125}, {"x": 2012.290212183436, "y": -0.23342648}, {"x": 2012.37234770705, "y": -0.35421416}, {"x": 2012.457221081451, "y": -0.046312466}, {"x": 2012.539356605065, "y": 0.11467073}, {"x": 2012.624229979466, "y": 0.24986303}, {"x": 2012.7091033538672, "y": 0.101902515}, {"x": 2012.7912388774807, "y": 0.0055761896}, {"x": 2012.8761122518824, "y": -0.24062341}, {"x": 2012.958247775496, "y": -0.34406975}, {"x": 2013.041067761807, "y": -0.45359764}, {"x": 2013.123203285421, "y": -0.4162098}, {"x": 2013.202600958248, "y": -0.42781708}, {"x": 2013.2874743326488, "y": -0.48455358}, {"x": 2013.3696098562627, "y": -0.31855133}, {"x": 2013.454483230664, "y": -0.1728138}, {"x": 2013.536618754278, "y": 0.05578562}, {"x": 2013.621492128679, "y": 0.1329709}, {"x": 2013.70636550308, "y": 0.2841793}, {"x": 2013.788501026694, "y": 0.15632218}, {"x": 2013.8733744010951, "y": -0.13820116}, {"x": 2013.955509924709, "y": -0.7768329}];
+const CLIM_CYCLES = [{"id": 32, "start": 1991.6228610540725, "peak_age": 1992.539356605065, "peak_val": 0.38768575, "end": 1993.080424366872}, {"id": 33, "start": 1993.080424366872, "peak_age": 1993.621492128679, "peak_val": 0.44713145, "end": 1994.2049965776864}, {"id": 34, "start": 1994.2049965776864, "peak_age": 1994.788501026694, "peak_val": 0.24670622, "end": 1995.247433264887}, {"id": 35, "start": 1995.247433264887, "peak_age": 1995.70636550308, "peak_val": 0.117632575, "end": 1996.165297741273}, {"id": 36, "start": 1996.165297741273, "peak_age": 1996.624229979466, "peak_val": 0.24087514, "end": 1997.165297741273}, {"id": 37, "start": 1997.165297741273, "peak_age": 1997.70636550308, "peak_val": 0.6734119, "end": 1998.6639288158794}, {"id": 38, "start": 1998.6639288158794, "peak_age": 1999.621492128679, "peak_val": 0.04784071, "end": 2000.1228610540725}, {"id": 39, "start": 2000.1228610540725, "peak_age": 2000.624229979466, "peak_val": 0.18909852, "end": 2001.1228610540725}, {"id": 40, "start": 2001.1228610540725, "peak_age": 2001.621492128679, "peak_val": 0.26211149, "end": 2002.1639288158794}, {"id": 41, "start": 2002.1639288158794, "peak_age": 2002.70636550308, "peak_val": 0.49101338, "end": 2003.20636550308}, {"id": 42, "start": 2003.20636550308, "peak_age": 2003.70636550308, "peak_val": 0.3266293, "end": 2004.165297741273}, {"id": 43, "start": 2004.165297741273, "peak_age": 2004.624229979466, "peak_val": 0.52273256, "end": 2005.165297741273}, {"id": 44, "start": 2005.165297741273, "peak_age": 2005.70636550308, "peak_val": 0.20914991, "end": 2006.1639288158794}, {"id": 45, "start": 2006.1639288158794, "peak_age": 2006.621492128679, "peak_val": 0.3371853, "end": 2007.121492128679}, {"id": 46, "start": 2007.121492128679, "peak_age": 2007.621492128679, "peak_val": 0.094231434, "end": 2008.1652977412732}, {"id": 47, "start": 2008.1652977412732, "peak_age": 2008.7091033538672, "peak_val": 0.19930181, "end": 2009.2077344284735}, {"id": 48, "start": 2009.2077344284735, "peak_age": 2009.70636550308, "peak_val": 0.25009444, "end": 2010.1639288158794}, {"id": 49, "start": 2010.1639288158794, "peak_age": 2010.621492128679, "peak_val": 0.16502103, "end": 2011.121492128679}, {"id": 50, "start": 2011.121492128679, "peak_age": 2011.621492128679, "peak_val": 0.36767763, "end": 2012.1228610540725}, {"id": 51, "start": 2012.1228610540725, "peak_age": 2012.624229979466, "peak_val": 0.24986303, "end": 2013.165297741273}, {"id": 52, "start": 2013.165297741273, "peak_age": 2013.70636550308, "peak_val": 0.2841793, "end": 2014.1639288158794}];
+
+FRED_SERIES.sort((a,b)=>a.x-b.x);
+FRED_RAW.sort((a,b)=>a.x-b.x);
+CLIM_SERIES.sort((a,b)=>a.x-b.x);
+
+// ── PRE-LOAD EXISTING MATCHES ─────────────────────────────────────────────────
+let fredBounds = [1994.5, 1995.0685905349583, 1995.533761569792, 1995.891408021547, 1997.669734704927, 1999.83540877098, 2000.8000000000002, 2001.9857145, 2002.9732145, 2003.830357, 2004.8571425, 2006.047619, 2007.0333335, 2007.8000000000002, 2008.5793178126692, 2009.3914455874392, 2010.5148890092041, 2011.7060097455333];
+let matches    = [{"fredId": 5, "climId": 38}, {"fredId": 6, "climId": 39}, {"fredId": 7, "climId": 40}, {"fredId": 8, "climId": 41}, {"fredId": 9, "climId": 42}, {"fredId": 10, "climId": 43}, {"fredId": 11, "climId": 44}, {"fredId": 12, "climId": 45}, {"fredId": 13, "climId": 46}, {"fredId": 14, "climId": 47}, {"fredId": 15, "climId": 48}, {"fredId": 16, "climId": 49}, {"fredId": 17, "climId": 50}, {"fredId": 4, "climId": 37}, {"fredId": 3, "climId": 36}, {"fredId": 2, "climId": 35}, {"fredId": 1, "climId": 34}];
+
+// ── EARTHQUAKE PIN STATE ─────────────────────────────────────────────────────
+// pin = { pseudoX: number, calY: number } — a hard warp anchor from known event
+let pin = null;   // null = no pin
+
+function updatePin() {
+  const pEl = document.getElementById('pin-pseudo');
+  const cEl = document.getElementById('pin-cal');
+  if(!pEl.value) return;
+  pin = { pseudoX: parseFloat(pEl.value), calY: parseFloat(cEl.value) };
+  document.getElementById('pin-info').textContent =
+    `Pin: pseudo ${pin.pseudoX.toFixed(4)} → cal ${pin.calY.toFixed(4)}  (earthquake April 2007)`;
+  draw();
+}
+
+function clearPin() {
+  pin=null;
+  document.getElementById('pin-pseudo').value='';
+  document.getElementById('pin-info').textContent='No pin set.';
+  draw();
+}
+
+// ── WARP ANCHORS (matches + optional pin) ────────────────────────────────────
+function buildFredCycles() {
+  return fredBounds.slice(0,-1).map((b,i)=>({
+    id:i+1, start:b, end:fredBounds[i+1],
+    ...findFredPeak(b,fredBounds[i+1])
+  }));
+}
+
+function findFredPeak(t0,t1) {
+  const pts=FRED_SERIES.filter(p=>p.x>=t0&&p.x<=t1);
+  if(!pts.length) return {peak_age:(t0+t1)/2, peak_val:0};
+  const best=pts.reduce((b,p)=>p.y>b.y?p:b,pts[0]);
+  return {peak_age:best.x, peak_val:best.y};
+}
+
+function buildWarpAnchors() {
+  const cycs=buildFredCycles();
+  const raw=[];
+  for(const m of matches) {
+    const fc=cycs.find(c=>c.id===m.fredId);
+    const kc=CLIM_CYCLES.find(c=>c.id===m.climId);
+    if(!fc||!kc) continue;
+    raw.push({cx:fc.start, ky:kc.start});
+    raw.push({cx:fc.end,   ky:kc.end  });
+  }
+  // Inject the earthquake pin as an additional hard anchor
+  if(pin) raw.push({cx:pin.pseudoX, ky:pin.calY, isPin:true});
+
+  raw.sort((a,b)=>a.cx-b.cx);
+  const dedup=[];
+  for(const a of raw) {
+    if(!dedup.length||Math.abs(a.cx-dedup[dedup.length-1].cx)>0.001) dedup.push(a);
+    else if(a.isPin) dedup[dedup.length-1]=a; // pin overrides if same position
+  }
+  return dedup.length>=2 ? dedup : null;
+}
+
+function warpX(rawX,anchors) {
+  if(!anchors) return rawX;
+  if(rawX<=anchors[0].cx) {
+    const a=anchors[0],b=anchors[1];
+    return a.ky+(b.ky-a.ky)/(b.cx-a.cx)*(rawX-a.cx);
+  }
+  if(rawX>=anchors[anchors.length-1].cx) {
+    const a=anchors[anchors.length-2],b=anchors[anchors.length-1];
+    return b.ky+(b.ky-a.ky)/(b.cx-a.cx)*(rawX-b.cx);
+  }
+  for(let i=0;i<anchors.length-1;i++) {
+    const a=anchors[i],b=anchors[i+1];
+    if(rawX>=a.cx&&rawX<=b.cx) return a.ky+(b.ky-a.ky)/(b.cx-a.cx)*(rawX-a.cx);
+  }
+  return rawX;
+}
+
+function unwarpX(calX,anchors) {
+  if(!anchors) return calX;
+  for(let i=0;i<anchors.length-1;i++) {
+    const a=anchors[i],b=anchors[i+1];
+    if(calX>=a.ky&&calX<=b.ky) return a.cx+(calX-a.ky)/(b.ky-a.ky)*(b.cx-a.cx);
+  }
+  if(calX<anchors[0].ky) {
+    const a=anchors[0],b=anchors[1];
+    return a.cx+(calX-a.ky)/(b.ky-a.ky)*(b.cx-a.cx);
+  }
+  const a=anchors[anchors.length-2],b=anchors[anchors.length-1];
+  return b.cx+(calX-b.ky)/(b.ky-a.ky)*(b.cx-a.cx);
+}
+
+// ── CANVASES & LAYOUT ─────────────────────────────────────────────────────────
+const cF=document.getElementById('cF'), cK=document.getElementById('cK');
+const ctxF=cF.getContext('2d'), ctxK=cK.getContext('2d');
+const FRED_Y={min:-6.0,max:-4.7}, CLIM_Y={min:-1.0,max:1.0};
+const PAD={l:55,r:18,t:22,b:32};
+let fredView={xMin:1993.5,xMax:2013.0}, climView={xMin:1993.5,xMax:2013.0};
+
+function resize() {
+  const DPR=devicePixelRatio;
+  [['cF','wrap-fred'],['cK','wrap-clim']].forEach(([id,wrap])=>{
+    const c=document.getElementById(id), el=document.getElementById(wrap);
+    c.width=el.clientWidth*DPR; c.height=el.clientHeight*DPR;
+    c.style.width=el.clientWidth+'px'; c.style.height=el.clientHeight+'px';
+  });
+  draw();
+}
+new ResizeObserver(resize).observe(document.getElementById('charts'));
+
+// ── COORD HELPERS ─────────────────────────────────────────────────────────────
+const sxV=(x,v,W)=>PAD.l+(x-v.xMin)/(v.xMax-v.xMin)*(W-PAD.l-PAD.r);
+const syY=(y,ye,H)=>PAD.t+(ye.max-y)/(ye.max-ye.min)*(H-PAD.t-PAD.b);
+const invSxV=(px,v,W)=>v.xMin+(px-PAD.l)/(W-PAD.l-PAD.r)*(v.xMax-v.xMin);
+const getMx=(c,e)=>{const r=c.getBoundingClientRect();return e.clientX-r.left;};
+
+// ── DRAW GRID ─────────────────────────────────────────────────────────────────
+function drawGrid(ctx,view,yext,W,H) {
+  const DPR=devicePixelRatio; ctx.save(); ctx.scale(DPR,DPR); W/=DPR; H/=DPR;
+  const pw=W-PAD.l-PAD.r, ph=H-PAD.t-PAD.b;
+  const span=view.xMax-view.xMin, step=span>15?2:span>6?1:0.5;
+  ctx.strokeStyle='rgba(30,42,56,0.8)'; ctx.lineWidth=1;
+  ctx.fillStyle='#2e4055'; ctx.font='9px JetBrains Mono,monospace'; ctx.textAlign='center';
+  for(let yr=Math.ceil(view.xMin/step)*step;yr<=view.xMax;yr+=step) {
+    const x=sxV(yr,view,W);
+    if(x<PAD.l||x>PAD.l+pw) continue;
+    ctx.beginPath(); ctx.moveTo(x,PAD.t); ctx.lineTo(x,PAD.t+ph); ctx.stroke();
+    ctx.fillText(yr.toFixed(step<1?1:0),x,PAD.t+ph+12);
+  }
+  const yspan=yext.max-yext.min, ystep=yspan>2?0.5:yspan>0.8?0.2:0.1;
+  ctx.textAlign='right';
+  for(let v=Math.ceil(yext.min/ystep)*ystep;v<=yext.max+0.001;v+=ystep) {
+    const y=syY(v,yext,H);
+    if(y<PAD.t||y>PAD.t+ph) continue;
+    ctx.strokeStyle='rgba(30,42,56,0.6)';
+    ctx.beginPath(); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+pw,y); ctx.stroke();
+    ctx.fillStyle='#2e4055'; ctx.fillText(v.toFixed(1),PAD.l-4,y+3);
+  }
+  ctx.restore();
+}
+
+// ── DRAW FRED ─────────────────────────────────────────────────────────────────
+function drawFred() {
+  const DPR=devicePixelRatio, W=cF.width, H=cF.height;
+  ctxF.clearRect(0,0,W,H); ctxF.fillStyle='#0a0e14'; ctxF.fillRect(0,0,W,H);
+  const anchors=buildWarpAnchors(), Wc=W/DPR, Hc=H/DPR;
+  drawGrid(ctxF,fredView,FRED_Y,W,H);
+  ctxF.save(); ctxF.scale(DPR,DPR);
+  const pw=Wc-PAD.l-PAD.r, ph=Hc-PAD.t-PAD.b;
+  ctxF.save(); ctxF.beginPath(); ctxF.rect(PAD.l,PAD.t,pw,ph); ctxF.clip();
+
+  // Fred line
+  ctxF.strokeStyle='rgba(245,166,35,0.4)'; ctxF.lineWidth=1.2; ctxF.lineJoin='round';
+  ctxF.beginPath(); let first=true;
+  for(const p of FRED_SERIES) {
+    const wx=warpX(p.x,anchors), px=sxV(wx,fredView,Wc), py=syY(p.y,FRED_Y,Hc);
+    if(px<PAD.l-2||px>PAD.l+pw+2){first=true;continue;}
+    first?ctxF.moveTo(px,py):ctxF.lineTo(px,py); first=false;
+  }
+  ctxF.stroke();
+
+  // dots
+  ctxF.fillStyle='rgba(245,166,35,0.7)';
+  for(const p of FRED_RAW) {
+    const wx=warpX(p.x,anchors), px=sxV(wx,fredView,Wc), py=syY(p.y,FRED_Y,Hc);
+    if(px<PAD.l-2||px>PAD.l+pw+2) continue;
+    ctxF.beginPath(); ctxF.arc(px,py,2,0,Math.PI*2); ctxF.fill();
+  }
+
+  // Cycle shading & bounds
+  const cycs=buildFredCycles();
+  for(const cyc of cycs) {
+    const xs=warpX(cyc.start,anchors), xe=warpX(cyc.end,anchors);
+    const px0=sxV(xs,fredView,Wc), px1=sxV(xe,fredView,Wc);
+    const isM=matches.some(m=>m.fredId===cyc.id);
+    const isSel=selected?.which==='fred'&&selected.cycleId===cyc.id;
+    if(isSel) { ctxF.fillStyle='rgba(255,159,67,0.15)'; ctxF.fillRect(px0,PAD.t,px1-px0,ph); }
+    else if(isM) { ctxF.fillStyle='rgba(139,92,246,0.1)'; ctxF.fillRect(px0,PAD.t,px1-px0,ph); }
+    const pkx=sxV(warpX(cyc.peak_age,anchors),fredView,Wc);
+    const pky=syY(cyc.peak_val,FRED_Y,Hc);
+    ctxF.beginPath(); ctxF.arc(pkx,pky,3.5,0,Math.PI*2);
+    ctxF.fillStyle=isSel?'#ff9f43':isM?'#8b5cf6':'rgba(245,166,35,0.6)'; ctxF.fill();
+    const midx=sxV(warpX((cyc.start+cyc.end)/2,anchors),fredView,Wc);
+    ctxF.fillStyle=isSel?'#ff9f43':isM?'#8b5cf6':'#4a6075';
+    ctxF.font='8px JetBrains Mono,monospace'; ctxF.textAlign='center';
+    ctxF.fillText('#'+cyc.id,midx,PAD.t+12);
+  }
+
+  // Bounds
+  for(let i=0;i<fredBounds.length;i++) {
+    const wx=warpX(fredBounds[i],anchors), px=sxV(wx,fredView,Wc);
+    if(px<PAD.l||px>PAD.l+pw) continue;
+    ctxF.strokeStyle=dragBoundIdx===i?'#f0b429':'rgba(240,180,41,0.35)';
+    ctxF.lineWidth=dragBoundIdx===i?2:1;
+    ctxF.setLineDash([3,3]); ctxF.beginPath();
+    ctxF.moveTo(px,PAD.t); ctxF.lineTo(px,PAD.t+ph); ctxF.stroke();
+    ctxF.setLineDash([]);
+  }
+
+  // ── EARTHQUAKE PIN ──────────────────────────────────────────────────────────
+  if(pin) {
+    const wx=warpX(pin.pseudoX,anchors), px=sxV(wx,fredView,Wc);
+    if(px>=PAD.l-2&&px<=PAD.l+pw+2) {
+      // Red shaded region ± half-sample around pin
+      ctxF.fillStyle='rgba(255,71,87,0.10)';
+      ctxF.fillRect(px-6,PAD.t,12,ph);
+      // Vertical line
+      ctxF.strokeStyle='#ff4757'; ctxF.lineWidth=2; ctxF.setLineDash([4,3]);
+      ctxF.beginPath(); ctxF.moveTo(px,PAD.t); ctxF.lineTo(px,PAD.t+ph); ctxF.stroke();
+      ctxF.setLineDash([]);
+      // Label
+      ctxF.fillStyle='#ff4757'; ctxF.font='bold 9px JetBrains Mono,monospace';
+      ctxF.textAlign='center';
+      ctxF.fillText('EQ',px,PAD.t+ph-6);
+      ctxF.fillText(pin.calY.toFixed(2)+'yr',px,PAD.t+ph-16);
+    }
+  }
+
+  ctxF.restore(); ctxF.restore();
+}
+
+// ── DRAW CLIMATE ──────────────────────────────────────────────────────────────
+function drawClim() {
+  const DPR=devicePixelRatio, W=cK.width, H=cK.height;
+  ctxK.clearRect(0,0,W,H); ctxK.fillStyle='#0a0e14'; ctxK.fillRect(0,0,W,H);
+  const Wc=W/DPR, Hc=H/DPR;
+  drawGrid(ctxK,climView,CLIM_Y,W,H);
+  ctxK.save(); ctxK.scale(DPR,DPR);
+  const pw=Wc-PAD.l-PAD.r, ph=Hc-PAD.t-PAD.b;
+  ctxK.save(); ctxK.beginPath(); ctxK.rect(PAD.l,PAD.t,pw,ph); ctxK.clip();
+
+  // Climate line
+  ctxK.strokeStyle='rgba(78,205,196,0.5)'; ctxK.lineWidth=1.2; ctxK.lineJoin='round';
+  ctxK.beginPath(); let first=true;
+  for(const p of CLIM_SERIES) {
+    const px=sxV(p.x,climView,Wc), py=syY(p.y,CLIM_Y,Hc);
+    if(px<PAD.l-2||px>PAD.l+pw+2){first=true;continue;}
+    first?ctxK.moveTo(px,py):ctxK.lineTo(px,py); first=false;
+  }
+  ctxK.stroke();
+
+  // Cycles
+  for(const cyc of CLIM_CYCLES) {
+    const px0=sxV(cyc.start,climView,Wc), px1=sxV(cyc.end,climView,Wc);
+    const isM=matches.some(m=>m.climId===cyc.id);
+    const isSel=selected?.which==='clim'&&selected.cycleId===cyc.id;
+    if(isSel) { ctxK.fillStyle='rgba(116,185,255,0.15)'; ctxK.fillRect(px0,PAD.t,px1-px0,ph); }
+    else if(isM) { ctxK.fillStyle='rgba(139,92,246,0.1)'; ctxK.fillRect(px0,PAD.t,px1-px0,ph); }
+    const pkx=sxV(cyc.peak_age,climView,Wc), pky=syY(cyc.peak_val,CLIM_Y,Hc);
+    ctxK.beginPath(); ctxK.arc(pkx,pky,3.5,0,Math.PI*2);
+    ctxK.fillStyle=isSel?'#74b9ff':isM?'#8b5cf6':'rgba(78,205,196,0.7)'; ctxK.fill();
+    const midx=sxV((cyc.start+cyc.end)/2,climView,Wc);
+    ctxK.fillStyle=isSel?'#74b9ff':isM?'#8b5cf6':'#4a6075';
+    ctxK.font='8px JetBrains Mono,monospace'; ctxK.textAlign='center';
+    ctxK.fillText('#'+cyc.id,midx,PAD.t+12);
+    // Show which Fred band is matched
+    const fm=matches.find(m=>m.climId===cyc.id);
+    if(fm) {
+      ctxK.fillStyle='rgba(139,92,246,0.85)';
+      ctxK.fillText('F'+fm.fredId,midx,PAD.t+22);
+    }
+  }
+
+  // EQ calendar marker on climate panel too
+  if(pin) {
+    const anchors=buildWarpAnchors();
+    const calX=warpX(pin.pseudoX,anchors);
+    const px=sxV(calX,climView,Wc);
+    if(px>=PAD.l&&px<=PAD.l+pw) {
+      ctxK.strokeStyle='#ff4757'; ctxK.lineWidth=1.5; ctxK.setLineDash([4,3]);
+      ctxK.beginPath(); ctxK.moveTo(px,PAD.t); ctxK.lineTo(px,PAD.t+ph); ctxK.stroke();
+      ctxK.setLineDash([]);
+      ctxK.fillStyle='#ff4757'; ctxK.font='bold 9px JetBrains Mono,monospace';
+      ctxK.textAlign='center';
+      ctxK.fillText('EQ '+pin.calY.toFixed(2),px,PAD.t+ph-6);
+    }
+  }
+
+  ctxK.restore(); ctxK.restore();
+}
+
+function draw() { drawFred(); drawClim(); updateCorr(); }
+
+// ── CORRELATION ───────────────────────────────────────────────────────────────
+function interpClim(yr) {
+  for(let i=0;i<CLIM_SERIES.length-1;i++) {
+    const a=CLIM_SERIES[i],b=CLIM_SERIES[i+1];
+    if(yr>=a.x&&yr<=b.x) return a.y+(b.y-a.y)*(yr-a.x)/(b.x-a.x);
+  }
+  return null;
+}
+
+function updateCorr() {
+  const anchors=buildWarpAnchors();
+  document.getElementById('fred-count').textContent=buildFredCycles().length;
+  document.getElementById('matched-count').textContent=matches.length;
+  if(!anchors||matches.length<2){document.getElementById('corr-val').textContent='—';return;}
+  let sx=0,sy=0,sx2=0,sy2=0,sxy=0,n=0;
+  for(const p of FRED_SERIES) {
+    const wy=warpX(p.x,anchors), cv=interpClim(wy);
+    if(cv===null) continue;
+    const xv=p.y; sx+=xv;sy+=cv;sx2+=xv*xv;sy2+=cv*cv;sxy+=xv*cv;n++;
+  }
+  if(n<3){document.getElementById('corr-val').textContent='—';return;}
+  const r=(n*sxy-sx*sy)/Math.sqrt((n*sx2-sx*sx)*(n*sy2-sy*sy));
+  const el=document.getElementById('corr-val');
+  el.textContent=r.toFixed(3);
+  el.style.color=Math.abs(r)>0.5?'#56d364':Math.abs(r)>0.2?'#f5a623':'#f05454';
+}
+
+// ── HIT TESTING ───────────────────────────────────────────────────────────────
+function hitFredCycle(mx) {
+  const anchors=buildWarpAnchors(), Wc=cF.width/devicePixelRatio;
+  for(const cyc of buildFredCycles()) {
+    if(mx>=sxV(warpX(cyc.start,anchors),fredView,Wc)&&
+       mx<=sxV(warpX(cyc.end,  anchors),fredView,Wc)) return cyc;
+  }
+  return null;
+}
+function hitClimCycle(mx) {
+  const Wc=cK.width/devicePixelRatio;
+  for(const cyc of CLIM_CYCLES)
+    if(mx>=sxV(cyc.start,climView,Wc)&&mx<=sxV(cyc.end,climView,Wc)) return cyc;
+  return null;
+}
+function nearBoundFred(mx) {
+  const anchors=buildWarpAnchors(), Wc=cF.width/devicePixelRatio;
+  for(let i=0;i<fredBounds.length;i++)
+    if(Math.abs(mx-sxV(warpX(fredBounds[i],anchors),fredView,Wc))<7) return i;
+  return null;
+}
+
+// ── MODE & STATE ──────────────────────────────────────────────────────────────
+let mode='match', selected=null, history=[], dragBoundIdx=null, panDrag=null;
+
+function setMode(m) {
+  mode=m;
+  document.getElementById('btn-match').classList.toggle('active',m==='match');
+  document.getElementById('btn-edit').classList.toggle('active-edit',m==='edit');
+  document.getElementById('btn-pin').classList.toggle('active-pin',m==='pin');
+  cF.style.cursor=m==='edit'?'crosshair':m==='pin'?'crosshair':'default';
+  const msgs={
+    match:'Click a Fred band → click matching climate cycle  (right-click to remove)',
+    edit:'Click to add boundary · drag to move · double-click to remove',
+    pin:'Click on the d13C jump in the Fred chart to place the earthquake pin'
+  };
+  setStatus(msgs[m]);
+}
+
+// ── PAN & ZOOM ────────────────────────────────────────────────────────────────
+const MIN_SPAN=0.5, MAX_SPAN=25;
+
+cF.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const span=fredView.xMax-fredView.xMin, f=(getMx(cF,e)-PAD.l)/(cF.width/devicePixelRatio-PAD.l-PAD.r);
+  const ns=Math.max(MIN_SPAN,Math.min(MAX_SPAN,span*(1+e.deltaY*0.001)));
+  const cx=fredView.xMin+f*span;
+  fredView.xMin=cx-ns*f; fredView.xMax=cx+ns*(1-f);
+  climView.xMin=fredView.xMin; climView.xMax=fredView.xMax; draw();
+},{passive:false});
+
+cK.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const span=climView.xMax-climView.xMin, f=(getMx(cK,e)-PAD.l)/(cK.width/devicePixelRatio-PAD.l-PAD.r);
+  const ns=Math.max(MIN_SPAN,Math.min(MAX_SPAN,span*(1+e.deltaY*0.001)));
+  const cx=climView.xMin+f*span;
+  climView.xMin=cx-ns*f; climView.xMax=cx+ns*(1-f);
+  fredView.xMin=climView.xMin; fredView.xMax=climView.xMax; draw();
+},{passive:false});
+
+cF.addEventListener('mousedown',e=>{
+  if(mode==='edit'){
+    const mx=getMx(cF,e),idx=nearBoundFred(mx);
+    if(idx!==null){save();dragBoundIdx=idx;cF.style.cursor='ew-resize';e.preventDefault();return;}
+  }
+  panDrag={chart:'fred',startX:e.clientX,startMin:fredView.xMin,startMax:fredView.xMax,moved:false};
+});
+cK.addEventListener('mousedown',e=>{
+  panDrag={chart:'clim',startX:e.clientX,startMin:climView.xMin,startMax:climView.xMax,moved:false};
+});
+
+window.addEventListener('mousemove',e=>{
+  if(mode==='edit'&&dragBoundIdx!==null){
+    const mx=getMx(cF,e), anchors=buildWarpAnchors(), Wc=cF.width/devicePixelRatio;
+    const calX=invSxV(mx,fredView,Wc);
+    let rawX=anchors?unwarpX(calX,anchors):calX;
+    const lo=fredBounds[dragBoundIdx-1]??FRED_SERIES[0].x-0.1;
+    const hi=fredBounds[dragBoundIdx+1]??FRED_SERIES[FRED_SERIES.length-1].x+0.1;
+    fredBounds[dragBoundIdx]=Math.max(lo+0.01,Math.min(hi-0.01,rawX));
+    draw(); return;
+  }
+  if(!panDrag) return;
+  const dx=e.clientX-panDrag.startX;
+  if(Math.abs(dx)>3) panDrag.moved=true;
+  if(!panDrag.moved) return;
+  if(panDrag.chart==='fred'){
+    const Wc=cF.width/devicePixelRatio, dyr=dx/(Wc-PAD.l-PAD.r)*(fredView.xMax-fredView.xMin);
+    fredView.xMin=panDrag.startMin-dyr; fredView.xMax=panDrag.startMax-dyr;
+    climView.xMin=fredView.xMin; climView.xMax=fredView.xMax;
+  } else {
+    const Wc=cK.width/devicePixelRatio, dyr=dx/(Wc-PAD.l-PAD.r)*(climView.xMax-climView.xMin);
+    climView.xMin=panDrag.startMin-dyr; climView.xMax=panDrag.startMax-dyr;
+    fredView.xMin=climView.xMin; fredView.xMax=climView.xMax;
+  }
+  draw();
+});
+window.addEventListener('mouseup',()=>{
+  dragBoundIdx=null; panDrag=null;
+  cF.style.cursor=mode==='edit'||mode==='pin'?'crosshair':'default';
+});
+cF.addEventListener('mousemove',e=>{
+  if(mode!=='edit') return;
+  cF.style.cursor=nearBoundFred(getMx(cF,e))!==null?'ew-resize':'crosshair';
+});
+
+// ── CLICKS ────────────────────────────────────────────────────────────────────
+let _ldF={x:0}, _ldK={x:0};
+cF.addEventListener('mousedown',e=>{_ldF={x:e.clientX};});
+cK.addEventListener('mousedown',e=>{_ldK={x:e.clientX};});
+
+cF.addEventListener('click',e=>{
+  if(panDrag?.moved) return;
+
+  // PIN MODE: place earthquake anchor
+  if(mode==='pin'){
+    const mx=getMx(cF,e), anchors=buildWarpAnchors(), Wc=cF.width/devicePixelRatio;
+    const calX=invSxV(mx,fredView,Wc);
+    const rawX=anchors?unwarpX(calX,anchors):calX;
+    const pEl=document.getElementById('pin-pseudo');
+    const cEl=document.getElementById('pin-cal');
+    pEl.value=rawX.toFixed(5);
+    pin={pseudoX:rawX, calY:parseFloat(cEl.value)};
+    document.getElementById('pin-info').textContent=
+      `Pin: pseudo ${pin.pseudoX.toFixed(4)} → cal ${pin.calY.toFixed(4)}  (click to adjust calendar year in field above)`;
+    setStatus(`EQ pin placed at pseudo=${rawX.toFixed(4)} → cal=${pin.calY.toFixed(3)}  — adjust calendar year in the bar above`);
+    draw(); return;
+  }
+
+  // EDIT MODE: add boundary
+  if(mode==='edit'){
+    if(Math.abs(e.clientX-_ldF.x)>4) return;
+    const mx=getMx(cF,e);
+    if(nearBoundFred(mx)!==null) return;
+    const anchors=buildWarpAnchors(), Wc=cF.width/devicePixelRatio;
+    const rawX=anchors?unwarpX(invSxV(mx,fredView,Wc),anchors):invSxV(mx,fredView,Wc);
+    if(rawX<FRED_SERIES[0].x||rawX>FRED_SERIES[FRED_SERIES.length-1].x) return;
+    save(); fredBounds.push(rawX); fredBounds.sort((a,b)=>a-b);
+    setStatus('Boundary added at '+rawX.toFixed(3)); draw(); return;
+  }
+
+  // MATCH MODE
+  if(mode!=='match') return;
+  const mx=getMx(cF,e), cyc=hitFredCycle(mx);
+  if(!cyc){selected=null;draw();return;}
+  if(!selected){selected={which:'fred',cycleId:cyc.id};setStatus('Fred #'+cyc.id+' selected → click matching climate cycle');draw();return;}
+  if(selected.which==='fred'){selected={which:'fred',cycleId:cyc.id};setStatus('Fred #'+cyc.id+' selected → click matching climate cycle');draw();return;}
+  doMatch(cyc.id,selected.cycleId);
+});
+
+cK.addEventListener('click',e=>{
+  if(mode!=='match') return;
+  if(panDrag?.moved) return;
+  const mx=getMx(cK,e), cyc=hitClimCycle(mx);
+  if(!cyc){selected=null;draw();return;}
+  if(!selected){selected={which:'clim',cycleId:cyc.id};setStatus('Climate #'+cyc.id+' selected → click matching Fred band');draw();return;}
+  if(selected.which==='clim'){selected={which:'clim',cycleId:cyc.id};setStatus('Climate #'+cyc.id+' selected → click matching Fred band');draw();return;}
+  doMatch(selected.cycleId,cyc.id);
+});
+
+function doMatch(fredId,climId) {
+  save();
+  matches=matches.filter(m=>m.fredId!==fredId&&m.climId!==climId);
+  matches.push({fredId,climId});
+  selected=null;
+  const kc=CLIM_CYCLES.find(c=>c.id===climId);
+  setStatus('✓ Fred #'+fredId+' ↔ Clim #'+climId+' ('+( kc?kc.peak_age.toFixed(2):climId)+')'+(pin?' — EQ pin active':''));
+  draw();
+}
+
+cF.addEventListener('contextmenu',e=>{
+  e.preventDefault(); if(mode!=='match') return;
+  const mx=getMx(cF,e),cyc=hitFredCycle(mx); if(!cyc) return;
+  save(); matches=matches.filter(m=>m.fredId!==cyc.id);
+  setStatus('Removed match for Fred #'+cyc.id); draw();
+});
+cK.addEventListener('contextmenu',e=>{
+  e.preventDefault();
+  const mx=getMx(cK,e),cyc=hitClimCycle(mx); if(!cyc) return;
+  save(); matches=matches.filter(m=>m.climId!==cyc.id);
+  setStatus('Removed match for climate #'+cyc.id); draw();
+});
+
+cF.addEventListener('dblclick',e=>{
+  if(mode!=='edit') return;
+  const mx=getMx(cF,e), idx=nearBoundFred(mx);
+  if(idx===null||idx===0||idx===fredBounds.length-1) return;
+  save(); fredBounds.splice(idx,1);
+  setStatus('Boundary removed'); draw();
+});
+
+// ── ACTIONS ───────────────────────────────────────────────────────────────────
+function clearMatches(){save();matches=[];selected=null;draw();setStatus('All matches cleared');}
+function save(){if(history.length>60)history.shift();history.push({bounds:[...fredBounds],matches:matches.map(m=>({...m})),pin:pin?{...pin}:null});}
+function undo(){
+  if(!history.length) return;
+  const s=history.pop(); fredBounds=s.bounds; matches=s.matches; pin=s.pin; selected=null;
+  if(pin){document.getElementById('pin-pseudo').value=pin.pseudoX.toFixed(5);document.getElementById('pin-cal').value=pin.calY.toFixed(3);}
+  setStatus('Undo'); draw();
+}
+function setStatus(msg){document.getElementById('status').textContent=msg;}
+
+// ── EXPORT / IMPORT ───────────────────────────────────────────────────────────
+function exportCSV() {
+  const anchors=buildWarpAnchors(), cycs=buildFredCycles();
+  let csv='fred_cycle_id,fred_pseudo_start,fred_pseudo_end,clim_cycle_id,calendar_year_start,calendar_year_end\n';
+  for(const cyc of cycs) {
+    const m=matches.find(x=>x.fredId===cyc.id), climId=m?m.climId:'';
+    const cs=anchors?warpX(cyc.start,anchors).toFixed(5):cyc.start.toFixed(5);
+    const ce=anchors?warpX(cyc.end,  anchors).toFixed(5):cyc.end.toFixed(5);
+    csv+=`${cyc.id},${cyc.start.toFixed(5)},${cyc.end.toFixed(5)},${climId},${cs},${ce}\n`;
+  }
+  csv+=`# BOUNDS:${JSON.stringify(fredBounds)}\n`;
+  csv+=`# MATCHES:${JSON.stringify(matches)}\n`;
+  if(pin) csv+=`# PIN:${JSON.stringify(pin)}\n`;
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download='fred_age_matches_v2.csv'; a.click();
+  setStatus('Exported '+cycs.length+' cycles, '+matches.length+' matched'+(pin?', EQ pin at '+pin.calY.toFixed(3):''));
+}
+
+function importCSV(event) {
+  const file=event.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const lines=e.target.result.split('\n');
+    const bLine=lines.find(l=>l.startsWith('# BOUNDS:')), mLine=lines.find(l=>l.startsWith('# MATCHES:')), pLine=lines.find(l=>l.startsWith('# PIN:'));
+    if(bLine) fredBounds=JSON.parse(bLine.slice('# BOUNDS:'.length));
+    if(mLine) matches=JSON.parse(mLine.slice('# MATCHES:'.length));
+    if(pLine) {
+      pin=JSON.parse(pLine.slice('# PIN:'.length));
+      document.getElementById('pin-pseudo').value=pin.pseudoX.toFixed(5);
+      document.getElementById('pin-cal').value=pin.calY.toFixed(3);
+    }
+    selected=null; draw();
+    setStatus('Imported '+matches.length+' matches'+(pin?' + EQ pin':''));
+  };
+  reader.readAsText(file); event.target.value='';
+}
+
+// ── INIT ─────────────────────────────────────────────────────────────────────
+setMode('match');
+setTimeout(resize,50);
+</script>
+</body>
+</html>

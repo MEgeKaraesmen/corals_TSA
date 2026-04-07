@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/mkara/anaconda3/python.exe --version)",
+      "Bash(PYTHON=\"/c/Users/mkara/anaconda3/python.exe\")",
+      "Bash($PYTHON -c \":*)",
+      "Read(//tmp/**)",
+      "Bash(\"/c/Users/mkara/anaconda3/python.exe\" 20260403_ls_spectra_all.py)"
+    ]
+  }
+}
